@@ -233,7 +233,7 @@ body{background:var(--bg);color:var(--text);overflow:hidden;display:flex;flex-di
 </div>
 
 <script>
-const STORAGE_KEY='tasktree_v1';
+const STORAGE_KEY='tasktree_v2';
 const THEME_KEY='tasktree_theme';
 let tasks=[];
 let editingId=null;
@@ -266,15 +266,7 @@ function load(){
     if(raw){tasks=JSON.parse(raw);return}
   }catch(e){}
   tasks=[
-    {id:'root',parent:null,title:'Świat Retrieverów',status:'doing',notes:'Main project',collapsed:false},
-    {id:'c1',parent:'root',title:'Content',status:'doing',notes:'',collapsed:false},
-    {id:'c2',parent:'root',title:'Tools',status:'todo',notes:'',collapsed:false},
-    {id:'c3',parent:'root',title:'SEO',status:'todo',notes:'',collapsed:false},
-    {id:'t1',parent:'c1',title:'Write toller breed guide',status:'done',notes:'',collapsed:false},
-    {id:'t2',parent:'c1',title:'Write FCR breed guide',status:'doing',notes:'',collapsed:false},
-    {id:'t3',parent:'c2',title:'Build feeding calculator',status:'todo',notes:'',collapsed:false},
-    {id:'t4',parent:'c2',title:'Add chatbot widget',status:'todo',notes:'Chatbase integration',collapsed:false},
-    {id:'t5',parent:'c3',title:'Keyword research',status:'doing',notes:'',collapsed:false},
+    {id:'root',parent:null,title:'Start Your Project',status:'todo',notes:'',collapsed:false}
   ];
   save();
 }
@@ -352,11 +344,19 @@ function render(){
   const rootMeasures=roots.map(r=>({root:r,width:measureSubtree(r.id).width}));
   const totalWidth=rootMeasures.reduce((s,m)=>s+m.width,0);
   const maxDepth=Math.max(...roots.map(r=>depthOf(r.id)));
-  const totalHeight=maxDepth*(NODE_H+VGAP)+40;
+  const treeHeightNeeded=maxDepth*(NODE_H+VGAP)+40;
+  
+  const wrap=document.getElementById('canvasWrap');
+  const viewportH=wrap.clientHeight||(window.innerHeight-60);
+  const viewportW=wrap.clientWidth||window.innerWidth;
+  
+  const canvasW=Math.max(totalWidth+80,viewportW);
+  const canvasH=Math.max(treeHeightNeeded+80,viewportH);
+  
+  const bottomY=canvasH-NODE_H/2-40;
   
   const positions={};
   let curX=40;
-  const bottomY=totalHeight-NODE_H/2-20;
   for(const m of rootMeasures){
     layoutNode(m.root.id,curX+m.width/2,bottomY,positions);
     curX+=m.width;
@@ -376,14 +376,14 @@ function render(){
     maxY+=offsetY;
   }
   
-  const canvasW=Math.max(maxX+60,window.innerWidth);
-  const canvasH=Math.max(maxY+40,window.innerHeight-60);
-  canvas.style.minWidth=canvasW+'px';
-  canvas.style.minHeight=canvasH+'px';
-  svg.setAttribute('width',canvasW);
-  svg.setAttribute('height',canvasH);
-  svg.style.width=canvasW+'px';
-  svg.style.height=canvasH+'px';
+  const finalCanvasW=Math.max(maxX+60,canvasW);
+  const finalCanvasH=Math.max(maxY+40,canvasH);
+  canvas.style.minWidth=finalCanvasW+'px';
+  canvas.style.minHeight=finalCanvasH+'px';
+  svg.setAttribute('width',finalCanvasW);
+  svg.setAttribute('height',finalCanvasH);
+  svg.style.width=finalCanvasW+'px';
+  svg.style.height=finalCanvasH+'px';
   
   for(const id in positions){
     const task=getTask(id);
