@@ -92,8 +92,10 @@ body{background:var(--bg);color:var(--text);overflow:hidden;display:flex;flex-di
 .canvas-wrap{flex:1;overflow:auto;position:relative;background:var(--bg);background-image:radial-gradient(circle,var(--border) 1px,transparent 1px);background-size:28px 28px;transition:background-color .25s ease}
 .canvas{position:relative;min-width:100%;min-height:100%;padding:40px}
 
-.node{position:absolute;min-width:180px;max-width:240px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;cursor:pointer;transition:transform .12s ease,box-shadow .15s ease,border-color .15s ease,background-color .25s ease;user-select:none;-webkit-user-select:none;box-shadow:var(--shadow-sm)}
+.node{position:absolute;min-width:180px;max-width:240px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;cursor:grab;transition:transform .12s ease,box-shadow .15s ease,border-color .15s ease,background-color .25s ease;user-select:none;-webkit-user-select:none;box-shadow:var(--shadow-sm);touch-action:none}
 .node:hover{border-color:var(--border-strong);box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.node:active{cursor:grabbing}
+.node.dragging{cursor:grabbing!important;box-shadow:var(--shadow-lg);transform:rotate(-1deg) scale(1.02)!important;opacity:0.95}
 .node.root{min-width:200px;background:var(--surface);border-color:var(--border-strong);box-shadow:var(--shadow-md)}
 .node.root:hover{box-shadow:var(--shadow-lg)}
 .node.done{opacity:0.55}
@@ -175,6 +177,9 @@ body{background:var(--bg);color:var(--text);overflow:hidden;display:flex;flex-di
     </div>
   </div>
   <div class="actions">
+    <button class="icon-btn" onclick="resetLayout()" title="Reset to automatic layout" aria-label="Reset layout">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 4 3 12 11 12"/></svg>
+    </button>
     <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
       <svg class="theme-icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       <svg class="theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
@@ -200,7 +205,7 @@ body{background:var(--bg);color:var(--text);overflow:hidden;display:flex;flex-di
 </div>
 
 <button class="fab" onclick="openAddModal(null)">+</button>
-<div class="hint">Tap to edit · Long press for more · Tree grows upward</div>
+<div class="hint">Drag to move · Tap to edit · Long press for more</div>
 
 <div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
   <div class="modal">
@@ -315,13 +320,19 @@ function layoutNode(id,cx,cy,positions){
   const node=getTask(id);
   if(!node)return;
   const nodeW=node.parent===null?220:200;
-  positions[id]={x:cx-nodeW/2,y:cy,w:nodeW,h:NODE_H};
+  if(node.manualPos){
+    positions[id]={x:node.manualPos.x,y:node.manualPos.y,w:nodeW,h:NODE_H,manual:true};
+  }else{
+    positions[id]={x:cx-nodeW/2,y:cy,w:nodeW,h:NODE_H};
+  }
   const kids=childrenOf(id);
   if(!kids.length||node.collapsed)return;
   let totalW=0;
   for(const k of kids){totalW+=measureSubtree(k.id).width}
-  let curX=cx-totalW/2;
-  const childY=cy-NODE_H-VGAP;
+  const parentCx=positions[id].x+nodeW/2;
+  const parentTop=positions[id].y-NODE_H/2;
+  let curX=parentCx-totalW/2;
+  const childY=parentTop-VGAP-NODE_H/2;
   for(const k of kids){
     const kw=measureSubtree(k.id).width;
     layoutNode(k.id,curX+kw/2,childY,positions);
@@ -428,9 +439,96 @@ function render(){
 function attachNodeEvents(el,id){
   let pressTimer=null;
   let longPressFired=false;
+  let startX=0,startY=0;
+  let origLeft=0,origTop=0;
+  let dragging=false;
+  let pendingPointer=false;
+  const DRAG_THRESHOLD=5;
   
-  el.addEventListener('click',(e)=>{
-    if(longPressFired){longPressFired=false;return}
+  el.addEventListener('contextmenu',(e)=>{
+    e.preventDefault();
+    showContextMenu(id,e.clientX,e.clientY);
+  });
+  
+  const pointerDown=(e)=>{
+    if(e.target.dataset.toggle)return;
+    if(e.type==='mousedown'&&e.button!==0)return;
+    const touch=e.touches?e.touches[0]:e;
+    startX=touch.clientX;
+    startY=touch.clientY;
+    origLeft=parseFloat(el.style.left)||0;
+    origTop=parseFloat(el.style.top)||0;
+    dragging=false;
+    longPressFired=false;
+    pendingPointer=true;
+    
+    pressTimer=setTimeout(()=>{
+      if(dragging||!pendingPointer)return;
+      longPressFired=true;
+      if(navigator.vibrate)navigator.vibrate(30);
+      showContextMenu(id,touch.clientX,touch.clientY);
+    },500);
+    
+    if(e.type==='mousedown'){
+      document.addEventListener('mousemove',pointerMove);
+      document.addEventListener('mouseup',pointerUp);
+    }
+  };
+  
+  const pointerMove=(e)=>{
+    if(!pendingPointer)return;
+    const touch=e.touches?e.touches[0]:e;
+    const dx=touch.clientX-startX;
+    const dy=touch.clientY-startY;
+    
+    if(!dragging&&Math.hypot(dx,dy)>DRAG_THRESHOLD){
+      dragging=true;
+      clearTimeout(pressTimer);
+      el.style.transition='none';
+      el.style.zIndex='50';
+      el.style.cursor='grabbing';
+      el.classList.add('dragging');
+      if(e.cancelable)e.preventDefault();
+    }
+    
+    if(dragging){
+      el.style.left=(origLeft+dx)+'px';
+      el.style.top=(origTop+dy)+'px';
+      updateConnectorsFor(id);
+      if(e.cancelable)e.preventDefault();
+    }
+  };
+  
+  const pointerUp=(e)=>{
+    clearTimeout(pressTimer);
+    document.removeEventListener('mousemove',pointerMove);
+    document.removeEventListener('mouseup',pointerUp);
+    
+    if(!pendingPointer)return;
+    pendingPointer=false;
+    
+    if(dragging){
+      const newLeft=parseFloat(el.style.left)||0;
+      const newTop=parseFloat(el.style.top)||0;
+      const task=getTask(id);
+      const nodeW=task.parent===null?220:200;
+      task.manualPos={x:newLeft,y:newTop+NODE_H/2};
+      save();
+      el.style.transition='';
+      el.style.zIndex='';
+      el.style.cursor='';
+      el.classList.remove('dragging');
+      dragging=false;
+      expandCanvasIfNeeded();
+      render();
+      return;
+    }
+    
+    if(longPressFired){
+      longPressFired=false;
+      return;
+    }
+    
     if(e.target.dataset.toggle){
       const t=getTask(e.target.dataset.toggle);
       t.collapsed=!t.collapsed;
@@ -438,30 +536,73 @@ function attachNodeEvents(el,id){
       return;
     }
     openEditModal(id);
-  });
-  
-  el.addEventListener('contextmenu',(e)=>{
-    e.preventDefault();
-    showContextMenu(id,e.clientX,e.clientY);
-  });
-  
-  const startPress=(e)=>{
-    longPressFired=false;
-    const touch=e.touches?e.touches[0]:e;
-    pressTimer=setTimeout(()=>{
-      longPressFired=true;
-      if(navigator.vibrate)navigator.vibrate(30);
-      showContextMenu(id,touch.clientX,touch.clientY);
-    },500);
   };
-  const cancelPress=()=>{clearTimeout(pressTimer)};
   
-  el.addEventListener('touchstart',startPress,{passive:true});
-  el.addEventListener('touchend',cancelPress);
-  el.addEventListener('touchmove',cancelPress);
-  el.addEventListener('mousedown',startPress);
-  el.addEventListener('mouseup',cancelPress);
-  el.addEventListener('mouseleave',cancelPress);
+  el.addEventListener('mousedown',pointerDown);
+  el.addEventListener('touchstart',pointerDown,{passive:false});
+  el.addEventListener('touchmove',pointerMove,{passive:false});
+  el.addEventListener('touchend',pointerUp);
+  el.addEventListener('touchcancel',pointerUp);
+}
+
+function updateConnectorsFor(id){
+  const canvas=document.getElementById('canvas');
+  const svg=document.getElementById('connectors');
+  const nodeEls={};
+  canvas.querySelectorAll('.node').forEach(n=>{nodeEls[n.dataset.id]=n});
+  svg.innerHTML='';
+  for(const t of tasks){
+    const el=nodeEls[t.id];
+    if(!el)continue;
+    const kids=childrenOf(t.id);
+    if(t.collapsed||!kids.length)continue;
+    const pLeft=parseFloat(el.style.left)||0;
+    const pTop=parseFloat(el.style.top)||0;
+    const pW=el.offsetWidth;
+    const pH=el.offsetHeight;
+    for(const k of kids){
+      const kEl=nodeEls[k.id];
+      if(!kEl)continue;
+      const kLeft=parseFloat(kEl.style.left)||0;
+      const kTop=parseFloat(kEl.style.top)||0;
+      const kW=kEl.offsetWidth;
+      const kH=kEl.offsetHeight;
+      const x1=pLeft+pW/2,y1=pTop;
+      const x2=kLeft+kW/2,y2=kTop+kH;
+      const my=(y1+y2)/2;
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d',`M ${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`);
+      path.setAttribute('class','connector');
+      svg.appendChild(path);
+    }
+  }
+}
+
+function expandCanvasIfNeeded(){
+  const canvas=document.getElementById('canvas');
+  const svg=document.getElementById('connectors');
+  let maxX=0,maxY=0;
+  canvas.querySelectorAll('.node').forEach(n=>{
+    const l=parseFloat(n.style.left)||0;
+    const t=parseFloat(n.style.top)||0;
+    maxX=Math.max(maxX,l+n.offsetWidth);
+    maxY=Math.max(maxY,t+n.offsetHeight);
+  });
+  const wrap=document.getElementById('canvasWrap');
+  const newW=Math.max(maxX+80,wrap.clientWidth);
+  const newH=Math.max(maxY+80,wrap.clientHeight);
+  canvas.style.minWidth=newW+'px';
+  canvas.style.minHeight=newH+'px';
+  svg.setAttribute('width',newW);
+  svg.setAttribute('height',newH);
+  svg.style.width=newW+'px';
+  svg.style.height=newH+'px';
+}
+
+function resetLayout(){
+  if(!confirm('Reset all cards back to automatic positions?'))return;
+  for(const t of tasks)delete t.manualPos;
+  save();render();
 }
 
 function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
